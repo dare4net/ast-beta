@@ -1,11 +1,39 @@
+
 const express = require('express');
 const { MongoClient } = require('mongodb');
 const cors = require('cors');
 require('dotenv').config();
+const rateLimit = require('express-rate-limit');
+const validator = require('validator');
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://after-school.tech',
+    'http://localhost:3000',
+    'http://localhost:4000',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:4000'
+  ],
+}));
+
+// Rate limiting middleware (100 requests per 15 minutes per IP)
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+// Middleware to ensure DB connection is ready
+function ensureDbReady(req, res, next) {
+  if (!db) {
+    return res.status(503).json({ error: 'Database not connected yet. Please try again shortly.' });
+  }
+  next();
+}
 
 const uri = process.env.MONGODB_URI;
 const client = new MongoClient(uri);
@@ -23,10 +51,12 @@ app.get('/', (req, res) => {
 });
 
 // Waitlist: { email }
-app.post('/waitlist', async (req, res) => {
+app.post('/waitlist', ensureDbReady, async (req, res) => {
   console.log('[POST] /waitlist', req.body);
   const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email required' });
+  if (!email || !validator.isEmail(email)) {
+    return res.status(400).json({ error: 'Valid email required' });
+  }
   const exists = await db.collection('waitlist').findOne({ email });
   if (exists) {
     console.log('[POST] /waitlist - Email already registered:', email);
@@ -38,11 +68,16 @@ app.post('/waitlist', async (req, res) => {
 });
 
 // Beta signup: { name, email }
-app.post('/beta/signup', async (req, res) => {
+app.post('/beta/signup', ensureDbReady, async (req, res) => {
   console.log('[POST] /beta/signup', req.body);
   const { name, email } = req.body;
-  if (!name || !email) return res.status(400).json({ error: 'Name and email required' });
-  const exists = await db.collection('betaSignups').findOne({ email });
+  if (!name || typeof name !== 'string' || name.length < 2 || name.length > 100) {
+    return res.status(400).json({ error: 'Valid name required (2-100 chars)' });
+  }
+  if (!email || !validator.isEmail(email)) {
+    return res.status(400).json({ error: 'Valid email required' });
+  }
+  const exists = await db.collection('beta_request').findOne({ email });
   if (exists) {
     console.log('[POST] /beta/signup - Email already registered:', email);
     return res.status(400).json({ error: 'Email already registered' });
@@ -53,24 +88,44 @@ app.post('/beta/signup', async (req, res) => {
 });
 
 // Beta invite: { name, email, course, experience, goals, availability }
-app.post('/beta/invite', async (req, res) => {
+app.post('/beta/invite', ensureDbReady, async (req, res) => {
   console.log('[POST] /beta/invite', req.body);
-  const { name, email, course, experience, goals, availability } = req.body;
-  if (!name || !email) return res.status(400).json({ error: 'Name and email required' });
-  const exists = await db.collection('betaInvites').findOne({ email });
+  const { name, email, course, otherCourse, favColor, nickname, favFood } = req.body;
+  if (!name || typeof name !== 'string' || name.length < 2 || name.length > 100) {
+    return res.status(400).json({ error: 'Valid name required (2-100 chars)' });
+  }
+  if (!email || !validator.isEmail(email)) {
+    return res.status(400).json({ error: 'Valid email required' });
+  }
+  if (course && typeof course !== 'string') {
+    return res.status(400).json({ error: 'Course must be a string' });
+  }
+  if (otherCourse && typeof otherCourse !== 'string') {
+    return res.status(400).json({ error: 'Other course must be a string' });
+  }
+  if (favColor && typeof favColor !== 'string') {
+    return res.status(400).json({ error: 'Favorite color must be a string' });
+  }
+  if (nickname && typeof nickname !== 'string') {
+    return res.status(400).json({ error: 'Nickname must be a string' });
+  }
+  if (favFood && typeof favFood !== 'string') {
+    return res.status(400).json({ error: 'Favorite food must be a string' });
+  }
+  const exists = await db.collection('beta_invite').findOne({ email });
   if (exists) {
     console.log('[POST] /beta/invite - Email already registered:', email);
     return res.status(400).json({ error: 'Email already registered' });
   }
   await db.collection('beta_invite').insertOne({
-    name, email, course, experience, goals, availability, createdAt: new Date()
+    name, email, course, otherCourse, favColor, nickname, favFood, createdAt: new Date()
   });
   console.log('[POST] /beta/invite - Registered:', email);
   res.json({ success: true });
 });
 
 // Beta spots: count of beta_request
-app.get('/beta/spots', async (req, res) => {
+app.get('/beta/spots', ensureDbReady, async (req, res) => {
   try {
     const count = await db.collection('beta_request').countDocuments();
     res.json({ spotsTaken: count });
