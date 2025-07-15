@@ -69,5 +69,16 @@ app.post('/beta/invite', async (req, res) => {
   res.json({ success: true });
 });
 
+// Beta spots: count of beta_request
+app.get('/beta/spots', async (req, res) => {
+  try {
+    const count = await db.collection('beta_request').countDocuments();
+    res.json({ spotsTaken: count });
+  } catch (error) {
+    console.error('[GET] /beta/spots - Error:', error);
+    res.status(500).json({ error: 'Failed to fetch beta spots count' });
+  }
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
